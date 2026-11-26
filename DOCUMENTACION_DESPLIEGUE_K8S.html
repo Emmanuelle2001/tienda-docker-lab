@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Despliegue a Kubernetes con Runner Autohospedado | Emmanuelle Hernández Oropeza</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+            line-height: 1.6;
+            color: #222222;
+            max-width: 850px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background-color: #ffffff;
+        }
+        .header {
+            border-bottom: 2px solid #333333;
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+        }
+        h1 {
+            font-size: 24px;
+            margin: 0 0 15px 0;
+            color: #111111;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .datos {
+            font-size: 15px;
+            line-height: 1.7;
+        }
+        .datos strong {
+            color: #111111;
+        }
+        h2 {
+            font-size: 18px;
+            color: #0b4c8c;
+            border-bottom: 1px solid #e0e0e0;
+            padding-bottom: 5px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+        h3 {
+            font-size: 16px;
+            color: #333333;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        p, li {
+            font-size: 14.5px;
+            text-align: justify;
+        }
+        ul, ol {
+            padding-left: 25px;
+        }
+        li {
+            margin-bottom: 6px;
+        }
+        pre {
+            background-color: #f6f8fa;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            padding: 14px;
+            overflow-x: auto;
+            font-family: "Consolas", "Courier New", monospace;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+        code {
+            font-family: "Consolas", "Courier New", monospace;
+            background-color: #eff1f3;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+        .imagen-contenedor {
+            margin: 25px 0;
+            text-align: center;
+        }
+        .imagen-contenedor img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+        }
+        .pie-imagen {
+            font-size: 13px;
+            color: #555555;
+            margin-top: 8px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>DESPLIEGUE A KUBERNETES (KIND) CON GITHUB ACTIONS Y RUNNER AUTOHOSPEDADO</h1>
+        <div class="datos">
+            <strong>Asignatura:</strong> Gestión del Proceso de Desarrollo de Software<br>
+            <strong>Alumno:</strong> Emmanuelle Hernández Oropeza<br>
+            <strong>Fecha de Entrega:</strong> 25 de noviembre de 2026
+        </div>
+    </div>
+
+    <h2>1. Introducción y Objetivos</h2>
+    <p>
+        El objetivo de esta práctica es implementar un flujo de despliegue continuo (CD) hacia un clúster local de Kubernetes (Kind) gestionado directamente desde GitHub Actions. Para salvar la barrera entre la infraestructura pública en la nube de GitHub y el entorno local, se configura y utiliza un Runner Autohospedado (Self-Hosted Runner) ejecutándose en la máquina del desarrollador bajo Windows.
+    </p>
+    <p>
+        A través de este procedimiento, un evento de tipo workflow_dispatch permite disparar el despliegue automático de una versión específica de la aplicación Tienda API en el namespace staging, encargándose el runner de descargar la imagen desde el registro de contenedores, transferirla al nodo de Kind y actualizar los manifiestos de Kubernetes mediante kubectl.
+    </p>
+
+    <h2>2. Arquitectura y Procedimiento Técnico</h2>
+
+    <h3>2.1. Preparación del Clúster y Namespaces</h3>
+    <p>
+        Se comprobó la operatividad del motor de Docker y el clúster local kind-devops-clase, estableciendo la segmentación lógica del entorno mediante la creación de los namespaces staging y production:
+    </p>
+    <pre><code>docker info
+kind get clusters
+kubectl config use-context kind-devops-clase
+kubectl get nodes
+kubectl create namespace staging
+kubectl create namespace production
+kubectl get namespaces</code></pre>
+
+    <h3>2.2. Manifiestos de Kubernetes</h3>
+    <p>
+        Se estructuraron los archivos declarativos dentro del directorio k8s para el controlador Deployment (1 réplica, contenedor tienda-api en puerto 8000) y el Service de tipo ClusterIP:
+    </p>
+    <pre><code># k8s/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tienda-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tienda-api
+  template:
+    metadata:
+      labels:
+        app: tienda-api
+    spec:
+      containers:
+      - name: tienda
+        image: tienda-api:1.0.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+
+# k8s/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: tienda-service
+spec:
+  selector:
+    app: tienda-api
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP</code></pre>
+
+    <h3>2.3. Configuración del Runner Autohospedado</h3>
+    <p>
+        Se descargó y configuró el agente de ejecución de GitHub Actions en el directorio C:\actions-runner. Para permitir la comunicación directa con el socket de Docker Desktop y la herramienta kind, el runner se ejecutó en sesión interactiva mediante el script run.cmd con directiva RemoteSigned habilitada en PowerShell.
+    </p>
+
+    <h3>2.4. Automatización con GitHub Actions</h3>
+    <p>
+        El flujo de trabajo .github/workflows/deploy.yml recibe como parámetro de entrada la versión del artefacto a desplegar y canaliza la ejecución hacia la etiqueta self-hosted de Windows:
+    </p>
+    <pre><code>name: Despliegue Kubernetes
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version a desplegar"
+        required: true
+        default: "1.0.0"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-staging:
+    runs-on: [self-hosted, Windows, X64]
+    environment: staging
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Descargar imagen Docker
+        shell: powershell
+        run: |
+          docker pull ghcr.io/paulutl/tienda-docker:${{ inputs.version }}
+
+      - name: Preparar imagen para kind
+        shell: powershell
+        run: |
+          docker tag ghcr.io/paulutl/tienda-docker:${{ inputs.version }} tienda-api:${{ inputs.version }}
+          kind load docker-image tienda-api:${{ inputs.version }} --name devops-clase
+
+      - name: Desplegar en staging
+        shell: powershell
+        run: |
+          kubectl apply -n staging -f k8s/service.yaml
+          kubectl set image deployment/tienda-api tienda=tienda-api:${{ inputs.version }} -n staging
+
+      - name: Verificar despliegue
+        shell: powershell
+        run: |
+          kubectl rollout status deployment/tienda-api -n staging --timeout=120s</code></pre>
+
+    <h2>3. Evidencias de Ejecución</h2>
+
+    <h3>3.1. Preparación del Clúster Kind y Creación de Namespaces</h3>
+    <p>Comprobación de conectividad con Docker, verificación del nodo devops-clase-control-plane y creación satisfactoria de los namespaces staging y production:</p>
+    <div class="imagen-contenedor">
+        <img src="img/01_preparacion_cluster_namespaces.jpg" alt="Preparación del clúster kind y namespaces">
+        <div class="pie-imagen">Figura 1. Verificación del clúster Kind y creación de los namespaces staging y production en PowerShell.</div>
+    </div>
+
+    <h3>3.2. Carga y Despliegue Manual en Kubernetes</h3>
+    <p>Descarga de la imagen de contenedor, etiquetado local, transferencia al clúster mediante kind load y aplicación de los manifiestos YAML en staging:</p>
+    <div class="imagen-contenedor">
+        <img src="img/02_carga_despliegue_manual_k8s.jpg" alt="Carga manual de imagen y despliegue inicial">
+        <div class="pie-imagen">Figura 2. Descarga de imagen, carga en Kind y comprobación de despliegue con rollout status.</div>
+    </div>
+
+    <h3>3.3. Publicación del Repositorio en GitHub</h3>
+    <p>Vinculación remota del proyecto y envío de los archivos del repositorio hacia la rama principal en GitHub:</p>
+    <div class="imagen-contenedor">
+        <img src="img/03_github_repo_push.jpg" alt="Push del repositorio a GitHub">
+        <div class="pie-imagen">Figura 3. Envío del código y manifiestos del repositorio tienda-docker-lab a GitHub.</div>
+    </div>
+
+    <h3>3.4. Ejecución del Runner Autohospedado en PowerShell</h3>
+    <p>Agente de GitHub Actions conectado activamente en la máquina local, recibiendo y procesando el trabajo deploy-staging con resultado Succeeded:</p>
+    <div class="imagen-contenedor">
+        <img src="img/04_runner_escuchando_y_ejecutando.png" alt="Runner autohospedado ejecutando el trabajo">
+        <div class="pie-imagen">Figura 4. Consola de PowerShell ejecutando el runner autohospedado y completando el job deploy-staging.</div>
+    </div>
+
+    <h3>3.5. Despliegue Automatizado Exitoso en GitHub Actions</h3>
+    <p>Pipeline de despliegue completado satisfactoriamente en 28 segundos a través del Self-Hosted Runner:</p>
+    <div class="imagen-contenedor">
+        <img src="img/05_github_actions_deploy_exitoso.png" alt="GitHub Actions workflow con check verde">
+        <div class="pie-imagen">Figura 5. Workflow Despliegue Kubernetes completado con éxito en GitHub Actions.</div>
+    </div>
+
+    <h3>3.6. Verificación de Recursos y Contenedores Desplegados</h3>
+    <p>Inspección del pod activo en staging, descripción detallada del Deployment, verificación del nombre de imagen tienda-api:1.0.0 y apertura de túnel con port-forward:</p>
+    <div class="imagen-contenedor">
+        <img src="img/06_verificacion_despliegue_kubectl.jpg" alt="Verificación de recursos con kubectl">
+        <div class="pie-imagen">Figura 6. Comprobación de estado del pod, versión de imagen desplegada y port-forward al puerto 8081.</div>
+    </div>
+
+    <h3>3.7. Comprobación de la API en el Navegador con Swagger UI</h3>
+    <p>Acceso a la interfaz de documentación interactiva en http://localhost:8081/docs confirmando la disponibilidad de los endpoints de la API:</p>
+    <div class="imagen-contenedor">
+        <img src="img/07_swagger_ui_navegador.png" alt="Swagger UI en el navegador">
+        <div class="pie-imagen">Figura 7. Documentación interactiva Swagger UI de la Tienda DevOps respondiendo en localhost:8081.</div>
+    </div>
+
+    <h2>4. Conclusión</h2>
+    <p>
+        La implementación del Self-Hosted Runner demostró ser una solución eficaz para conectar canalizaciones de integración continua en la nube con infraestructuras privadas y clústeres locales. Este modelo habilita la automatización completa del ciclo de despliegue sin exponer los puertos de la red interna a internet, manteniendo la trazabilidad declarativa de Kubernetes y el control de versiones de Git.
+    </p>
+
+</body>
+</html>
